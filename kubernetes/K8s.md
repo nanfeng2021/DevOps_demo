@@ -300,7 +300,7 @@ data:
   ROOT_PASSWORD: '123'
 ```
 
-maria-pod.yml
+mariadb-pod.yml
 
 ```yaml
 apiVersion: v1
@@ -411,5 +411,234 @@ minikube start --kubernetes-version=v1.23.3 --image-mirror-country='cn' --image-
 
 ```shell
 minikube start  --kubernetes-version=v1.23.3 --driver=docker  --image-repository='registry.cn-hangzhou.aliyuncs.com/google_containers' --force
+```
+
+
+
+### kubeadm
+
+
+
+#### Deployment
+
+管理Pod，让应用不宕机
+
+`kubectl api-resources`
+
+
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xxx-dep
+```
+
+
+
+```yaml
+export out="--dry-run=client -o yaml"
+kubectl create deploy ngx-dep --image=nginx:alpine $out
+```
+
+example
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: ngx-dep
+  name: ngx-dep
+  
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ngx-dep
+      
+  template:
+    metadata:
+      labels:
+        app: ngx-dep
+    spec:
+      containers:
+      - image: nginx:alpine
+        name: nginx
+```
+
+
+
+#### DaemonSet
+
+* 目标是在集群的每个节点上运行且仅运行一个Pod
+
+* 跟Deployment类似，管理控制Pod，但管理调度策略不同。
+
+daemonset template
+
+https://kubernetes.io/zh-cn/docs/concepts/workloads/controllers/daemonset/
+
+
+
+`kubectl api-resources`
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: xxx-ds
+```
+
+
+
+template
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: redis-ds
+  labels:
+    app: redis-ds
+
+spec:
+  selector:
+    matchLabels:
+      name: redis-ds
+
+  template:
+    metadata:
+      labels:
+        name: redis-ds
+    spec:
+      containers:
+      - image: redis:5-alpine
+        name: redis
+        ports:
+        - containerPort: 6379
+```
+
+
+
+```yaml
+export out="--dry-run=client -o yaml"
+
+# change "kind" to DaemonSet
+# delete "spec.replicas"
+kubectl create deploy redis-ds --image=redis:5-alpine $out
+```
+
+
+
+#### Taint&Toleration
+
+##### `kubectl taint` 
+
+`kubectl taint` + `节点名`  `污点名`  `污点` 
+
+去掉污点+ `-`
+
+```shell
+kubectl taint node master node-role.kubernetes.io/master:NoSchedule-
+```
+
+
+
+tolerations
+
+```yaml
+tolerations:
+- key: node-role.kubernetes.io/master
+  effect: NoSchedule
+  operator: Exists
+```
+
+
+
+#### Service
+
+`TCP/IP`
+
+`kubectl expose`  `--port` `--target-port`
+
+
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: xxx-svc
+```
+
+example-service.yml
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ngx-svc
+  
+spec:
+  selector:
+    app: ngx-dep
+    
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+```
+
+
+
+#### Ingress
+
+`Ingress` 、`Ingress Controller`  、`Ingress Class`
+
+* `--class` 指定Ingress从属的Ingress Class对象
+* `--rule` 指定路由规则，基本形式是"URI=Service"，http request -> service -> Pod
+
+
+
+```yaml
+export out="--dry-run=client -o yaml"
+kubectl create ing ngx-ing --rule="ngx.test/=ngx-svc:80" --class=ngx-ink $out
+```
+
+example-ingress.yml
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ngx-ing
+  
+spec:
+
+  ingressClassName: ngx-ink
+  
+  rules:
+  - host: ngx.test
+    http:
+      paths:
+      - path: /
+        pathType: Exact
+        backend:
+          service:
+            name: ngx-svc
+            port:
+              number: 80
+```
+
+example-ingress-class.yml
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: ngx-ink
+
+spec:
+  controller: nginx.org/ingress-controller
 ```
 
