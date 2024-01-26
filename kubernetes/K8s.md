@@ -618,7 +618,7 @@ https://github.com/chronolaw/k8s_study/tree/master/admin
 
 
 
-#### Deployment
+### Deployment
 
 管理Pod，让应用不宕机
 
@@ -721,11 +721,17 @@ kubectl scale --replicas=5 deploy ngx-dep
 
 
 
-#### DaemonSet
+### DaemonSet
 
 * 目标是在集群的每个节点上运行且仅运行一个Pod
-
 * 跟Deployment类似，管理控制Pod，但管理调度策略不同。
+
+特殊业务需求，每个节点都要运行Pod
+
+* 网络应用（如kube-proxy）
+* 监控应用（如Prometheus）监控节点的状态、实时上报信息
+* 日志应用（如Fluentd）搜集容器运行时产生的日志数据
+* 安全应用  执行安全审计、入侵检查、漏洞扫描等
 
 daemonset template
 
@@ -785,6 +791,12 @@ kubectl create deploy redis-ds --image=redis:5-alpine $out
 
 #### Taint&Toleration
 
+https://kubernetes.io/zh-cn/docs/concepts/scheduling-eviction/taint-and-toleration/
+
+`kubectl describe node`
+
+
+
 ##### `kubectl taint` 
 
 `kubectl taint` + `节点名`  `污点名`  `污点` 
@@ -799,6 +811,8 @@ kubectl taint node master node-role.kubernetes.io/master:NoSchedule-
 
 tolerations
 
+` kubectl explain ds.spec.template.spec.tolerations`
+
 ```yaml
 tolerations:
 - key: node-role.kubernetes.io/master
@@ -808,7 +822,7 @@ tolerations:
 
 
 
-#### Service
+### Service
 
 `TCP/IP`
 
@@ -843,7 +857,7 @@ spec:
 
 
 
-#### Ingress
+### Ingress
 
 `Ingress` 、`Ingress Controller`  、`Ingress Class`
 
