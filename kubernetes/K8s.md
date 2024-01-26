@@ -417,7 +417,7 @@ minikube start  --kubernetes-version=v1.23.3 --driver=docker  --image-repository
 
 ### kubeadm
 
-
+`init` `join` `upgrade` `reset`
 
 #### Deployment
 
@@ -641,4 +641,153 @@ metadata:
 spec:
   controller: nginx.org/ingress-controller
 ```
+
+
+
+### PersistentVolume
+
+`PersistentVolume`  `PersistentVolumeClaim`  `StorageClass`
+
+
+
+#### NFS
+
+
+
+
+
+### StatefulSet
+
+管理有状态应用
+
+* 启动顺序
+* 依赖关系
+* 网络标识
+* 数据持久化
+
+`kubectl api-resources`
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: xxx-sts
+```
+
+example-redis-sts.yml
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-sts
+
+spec:
+  serviceName: redis-svc
+  replicas: 2
+  selector:
+    matchLabels:
+      app: redis-sts
+
+  template:
+    metadata:
+      labels:
+        app: redis-sts
+    spec:
+      containers:
+      - image: redis:5-alpine
+        name: redis
+        ports:
+        - containerPort: 6379
+```
+
+
+
+example-redis-svc.yml
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-svc
+
+spec:
+  selector:
+    app: redis-sts
+
+  ports:
+  - port: 6379
+    protocol: TCP
+    targetPort: 6379
+```
+
+加入`volumeClaimTemplate`
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-pv-sts
+
+spec:
+  serviceName: redis-pv-svc
+
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-100m-pvc
+    spec:
+      storageClassName: nfs-client
+      accessModes:
+        - ReadWriteMany
+      resources:
+        requests:
+          storage: 100Mi
+
+  replicas: 2
+  selector:
+    matchLabels:
+      app: redis-pv-sts
+
+  template:
+    metadata:
+      labels:
+        app: redis-pv-sts
+    spec:
+      containers:
+      - image: redis:5-alpine
+        name: redis
+        ports:
+        - containerPort: 6379
+
+        volumeMounts:
+        - name: redis-100m-pvc
+          mountPath: /data
+```
+
+总结：
+
+1. StatefulSet的YAML描述和Deployment几乎完全相同，只是多了一个关键字段`serviceName`
+2. 要为StatefulSet里的Pod生成稳定的域名，需要定义Service对象，它的名字必须和StatefulSet里的`serviceName`一致
+3. 访问StatefulSet应该使用每个Pod的单独域名，形式是`Pod名.服务名`,不应该使用Service的负载均衡功能
+4. 在StatefulSet里可以用字段`volumeClaimTemplates`直接定义PVC，让Pod实现数据持久化存储
+
+
+
+### Kubectl rollout
+
+
+
+`kubectl rollout status`
+
+
+
+`kubectl rollout pause`
+
+
+
+`kubectl rollout resume`
+
+
+
+`kubectl rollout history`
 
