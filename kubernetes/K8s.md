@@ -419,6 +419,205 @@ minikube start  --kubernetes-version=v1.23.3 --driver=docker  --image-repository
 
 `init` `join` `upgrade` `reset`
 
+#### 准备工作
+
+```shell
+# 1、修改每个节点主机名
+sudo vi /etc/hostname
+
+# 2、Docker作为container runtime底层支持
+# 修改docker配置daemon.json
+# 把cgroup的驱动程序改成systemd，然后重启Docker守护进程
+cat <<EOF | sudo tee /etc/docker/daemon.json
+{
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "100m"
+  },
+  "storage-driver": "overlay2"
+}
+EOF
+
+sudo systemctl enable docker
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+
+# 3、让kubernetes检查、转发网络流量
+# 修改iptables配置，启动'br_netfilter'模块
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+br_netfilter
+EOF
+
+cat <<EOF | sudo tee /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward=1 # better than modify /etc/sysctl.conf
+EOF
+
+sudo sysctl --system
+
+# 4、修改'/etc/fstb', 关闭swap分区，提升kubernetes的性能
+sudo swapoff -a
+sudo sed -ri '/\sswap\s/s/^#?/#/' /etc/fstab
+```
+
+#### 安装kubeadm
+
+```shell
+# Google下载不稳定，选择其它软件源
+sudo apt install -y apt-transport-https ca-certificates curl
+
+curl https://mirrors.aliyun.com/kubernetes/apt/doc/apt-key.gpg | sudo apt-key add -
+
+cat <<EOF | sudo tee /etc/apt/sources.list.d/kubernetes.list
+deb https://mirrors.aliyun.com/kubernetes/apt/ kubernetes-xenial main
+EOF
+
+sudo apt update
+
+
+# kubeadm、kubelet、kubectl
+sudo apt install -y kubeadm=1.23.3-00 kubelet=1.23.3-00 kubectl=1.23.3-00
+
+# verify version
+kubeadm version
+kubectl version --client
+
+# lock version
+sudo apt-mark hold kubeadm kubelet kubectl
+```
+
+
+
+#### 下载Kubernetes组件镜像
+
+```shell
+# apiserver|etcd|scheduler
+# 国内访问困难，把镜像下载到本地
+kubeadm config images list --kubernetes-version v1.23.3
+
+k8s.gcr.io/kube-apiserver:v1.23.3
+k8s.gcr.io/kube-controller-manager:v1.23.3
+k8s.gcr.io/kube-scheduler:v1.23.3
+k8s.gcr.io/kube-proxy:v1.23.3
+k8s.gcr.io/pause:3.6
+k8s.gcr.io/etcd:3.5.1-0
+k8s.gcr.io/coredns/coredns:v1.8.6
+
+# 第一种，minikube打包，拷贝
+# 第二种，从国内的镜像网站下载，然后改名
+repo=registry.aliyuncs.com/google_containers
+
+for name in `kubeadm config images list --kubernetes-version v1.23.3`; do
+
+    src_name=${name#k8s.gcr.io/}
+    src_name=${src_name#coredns/}
+
+    docker pull $repo/$src_name
+
+    docker tag $repo/$src_name $name
+    docker rmi $repo/$src_name
+done
+
+
+## 结合，两种方法镜像IMAGE ID比较
+```
+
+#### 安装Master节点
+
+* `--pod-network-cidr` 设置集群里Pod的IP地址
+* `--apiserver-advertise-address` 设置apiserver的IP地址
+* `--kubernetes-version` 指定kubernetes的版本号
+
+```shell
+sudo kubeadm init \
+    --pod-network-cidr=10.10.0.0/16 \
+    --apiserver-advertise-address=192.168.10.210 \
+    --kubernetes-version=v1.23.3
+
+# step 1
+To start using your cluster, you need to run the following as a regular user:
+
+  mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+  
+# step 2
+Then you can join any number of worker nodes by running the following on each as root:
+
+kubeadm join 192.168.10.210:6443 --token tv9mkx.tw7it9vphe158e74 \
+  --discovery-token-ca-cert-hash sha256:e8721b8630d5b562e23c010c70559a6d3084f629abad6a2920e87855f8fb96f3
+  
+# verify version
+kubectl version
+kubectl get node
+```
+
+
+
+#### 安装Flannel网络插件
+
+https://github.com/flannel-io/flannel/
+
+```shell
+# 把Network改成'--pod-network-cidr'设置的地址段 
+net-conf.json: |
+    {
+      "Network": "10.10.0.0/16",
+      "Backend": {
+        "Type": "vxlan"
+      }
+    }
+    
+# install
+kubectl apply -f kube-flannel.yml
+
+# verify
+kubectl get node
+```
+
+
+
+#### 安装Worker节点
+
+```shell
+sudo \
+kubeadm join 192.168.10.210:6443 --token tv9mkx.tw7it9vphe158e74 \
+  --discovery-token-ca-cert-hash sha256:e8721b8630d5b562e23c010c70559a6d3084f629abad6a2920e87855f8fb96f3
+  
+# verify
+kubectl get node
+
+kubectl run ngx --image=nginx:alpine
+kubectl get pod -o wide
+```
+
+
+
+#### Console节点
+
+```shell
+scp `which kubectl` chrono@192.168.10.208:~/
+scp ~/.kube/config chrono@192.168.10.208:~/.kube
+```
+
+
+
+#### 注意点
+
+* 安装Kubernetes之前需要修改主机的配置，包括主机名、Docker配置、网络设置、交换分区等
+* Kubernetes组件镜像放在gcr.io，国内下载比较麻烦，可以考虑从minikube或者国内镜像网站获取
+* 安装Master节点需要使用命令`kubeadm init`，安装Worker节点需要使用命令`kubeadm join`，还要部署Flannel等网络插件才能让集群正常工作
+
+
+
+https://github.com/chronolaw/k8s_study/tree/master/admin
+
+
+
+
+
 #### Deployment
 
 管理Pod，让应用不宕机
@@ -436,12 +635,41 @@ metadata:
 
 
 
-```yaml
+```shell
 export out="--dry-run=client -o yaml"
 kubectl create deploy ngx-dep --image=nginx:alpine $out
 ```
 
-example
+example.yml
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app: ngx-dep
+  name: ngx-dep
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ngx-dep
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: ngx-dep
+    spec:
+      containers:
+      - image: nginx:alpine
+        name: nginx
+        resources: {}
+status: {}
+```
+
+example-deploy.yml
 
 ```yaml
 apiVersion: apps/v1
@@ -466,6 +694,30 @@ spec:
       - image: nginx:alpine
         name: nginx
 ```
+
+`replicas` `selector`
+
+#### replicas
+
+期望副本数量
+
+
+
+#### selector
+
+筛选要被管理的Pod对象
+
+`selector.matchLabels` 与`template.metadata.labels` ， `app: ngx-dep`
+
+
+
+#### kubectl scale
+
+```shell
+kubectl scale --replicas=5 deploy ngx-dep
+```
+
+
 
 
 
