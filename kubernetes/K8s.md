@@ -1976,7 +1976,7 @@ image: k8s.gcr.io/prometheus-adapter/prometheus-adapter:v0.9.1
 image: chronolaw/kube-state-metrics:v2.5.0
 image: chronolaw/prometheus-adapter:v0.9.1
 
-docker pull pengyc2019/prometheus-adapter:v0.9.1
+docker pull willdockerhub/prometheus-adapter:v0.9.1
 docker tag pengyc2019/prometheus-adapter:v0.9.1 k8s.gcr.io/prometheus-adapter/prometheus-adapter:v0.9.1
 docker rmi pengyc2019/prometheus-adapter:v0.9.1
 docker push k8s.gcr.io/prometheus-adapter/prometheus-adapter:v0.9.1
@@ -2002,3 +2002,59 @@ kubectl get pod -n monitoring
 1. Metris Server是一个Kubernetes插件，能够收集系统的核心资源指标，相关的命令`kubectl top`
 2. Prometheus是云原生监控领域的"事实标准"，用PromQL语言来查询数据，配合Grafana可以展示直观的图形界面，方便监控
 3. HorizontalPodAutoscaler实现了应用的自动水平伸缩功能，它从Metrics Server获取应用的运行指标，再实时调整Pod数量，可以很好地应对突发流量
+
+
+
+### CNI
+
+CNI（Container Networking Interface）容器网络接口
+
+依据实现技术的不同，CNI插件大致上分为三种
+
+* **Overlay**： 指它构建了一个工作在真实底层网络之上的逻辑网络，把原始的Pod网络数据封包，再通过下层网络发送出去，到了目的再拆包
+* **Route**：在底层网络之上工作，但它没有封包和拆包，而是使用系统内置的路由功能来实现Pod跨主机通信。好处性能高，对底层网络依赖性较强
+* **Underlay**：直接使用底层网络来实现CNI，Pod和宿主机是平等的，它对底层的硬件和网络的依赖性是最强的，因为不够灵活，但性能最高
+
+
+
+https://github.com/flannel-io/flannel/
+
+Flannel简单易用，是Kubernetes里最流行的CNI插件，但它在性能方面表现不是很好，一般不建议生产使用
+
+#### Calico
+
+https://github.com/projectcalico/calico
+
+一种Route模式的网络插件，使用BGP协议（Border Gateway Protocol）来维护路由信息，性能比Flannel好，而且支持多种网络策略，具备数据加密、安全隔离、流量整形等功能
+
+```shell
+wget https://projectcalico.docs.tigera.io/manifests/calico.yaml
+
+docker pull calico/cni:v3.23.1
+docker pull calico/node:v3.23.1
+docker pull calico/kube-controllers:v3.23.1
+
+kubectl apply -f calico.yaml
+
+kubectl create deploy ngx-dep --image=nginx:alpine --replicas=3
+```
+
+
+
+#### Cilium
+
+https://github.com/cilium/cilium
+
+一个比较新的网络插件，同时支持Overlay模式和Route模式，它的特点是深度使用了Linux eBPF技术，在内核层次操作网络数据，所以性能很高，可以实现各种功能。
+
+
+
+小结：
+
+1、Kubernetes使用的是"IP-per-pod"网络模型，每个Pod都会有唯一的IP地址
+
+2、CNI是Kubernetes定义的网络插件接口标准，按照实现方式可以分为"Overlay" "Route"和"Underlay"三种，常见的CNI插件有Flannel、Calico和Cilium
+
+3、Flannel支持Overlay模式，它使用了cni0网桥和flannel.1设备，跨主机通信会把原始数据包封装成VXLAN包再走宿主机网卡发送
+
+4、Calico支持Route模式，它不使用cni0网桥，而是创建路由规则，把数据包直接发送到目标网卡，所以性能很高
