@@ -967,6 +967,8 @@ spec:
 
 ### Ingress
 
+https://github.com/nginxinc/kubernetes-ingress
+
 `Ingress` 、`Ingress Controller`  、`Ingress Class`
 
 * `--class` 指定Ingress从属的Ingress Class对象
@@ -1015,6 +1017,91 @@ metadata:
 spec:
   controller: nginx.org/ingress-controller
 ```
+
+
+
+
+
+#### IngressController
+
+https://github.com/nginxinc/kubernetes-ingress
+
+```shell
+kubectl apply -f common/ns-and-sa.yaml
+kubectl apply -f rbac/rbac.yaml
+kubectl apply -f common/nginx-config.yaml
+kubectl apply -f common/default-server-secret.yaml
+
+kubectl apply -f common/crds/k8s.nginx.org_virtualservers.yaml
+kubectl apply -f common/crds/k8s.nginx.org_virtualserverroutes.yaml
+kubectl apply -f common/crds/k8s.nginx.org_transportservers.yaml
+kubectl apply -f common/crds/k8s.nginx.org_policies.yaml
+```
+
+ingress.yml
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ngx-ing
+  
+spec:
+
+  ingressClassName: ngx-ink
+  
+  rules:
+  - host: ngx.test
+    http:
+      paths:
+      - path: /
+        pathType: Exact
+        backend:
+          service:
+            name: ngx-svc
+            port:
+              number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: ngx-ink
+
+spec:
+  controller: nginx.org/ingress-controller
+
+```
+
+
+
+ingress-controller-kic.yml
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngx-kic-dep
+  namespace: nginx-ingress
+
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ngx-kic-dep
+
+  template:
+    metadata:
+      labels:
+        app: ngx-kic-dep
+    
+    spec:
+      containers:
+      - image: nginx/nginx-ingress:2.2-alpine
+        args:
+          - -ingress-class=ngx-ink
+```
+
+
 
 
 
