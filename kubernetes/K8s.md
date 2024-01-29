@@ -837,7 +837,14 @@ metadata:
   name: xxx-svc
 ```
 
-example-service.yml
+
+
+```shell
+export out="--dry-run=client -o yaml"
+kubectl expose deploy ngx-dep --port=80 --target-port=80 $out
+```
+
+example-svc.yml
 
 ```yaml
 apiVersion: v1
@@ -854,6 +861,107 @@ spec:
     targetPort: 80
     protocol: TCP
 ```
+
+
+
+ngx-conf.conf
+
+```json
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ngx-conf
+
+data:
+  default.conf: |
+    server {
+      listen 80;
+      location / {
+        default_type text/plain;
+        return 200
+          'srv : $server_addr:$server_port\nhost: $hostname\nuri : $request_method $host $request_uri\ndate: $time_iso8601\n';
+      }
+    }
+```
+
+ngx-dep-deploy.yml
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngx-dep
+
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ngx-dep
+
+  template:
+    metadata:
+      labels:
+        app: ngx-dep
+    spec:
+      volumes:
+      - name: ngx-conf-vol
+        configMap:
+          name: ngx-conf
+
+      containers:
+      - image: nginx:alpine
+        name: nginx
+        ports:
+        - containerPort: 80
+
+        volumeMounts:
+        - mountPath: /etc/nginx/conf.d
+          name: ngx-conf-vol
+```
+
+```shell
+# startup
+kubectl apply -f cm.yml
+kubectl apply -f deploy.yml
+kubectl apply -f svc.yml
+
+# verify
+kubectl exec -it ngx-dep-6796688696-r2j6t -- sh
+```
+
+
+
+以域名方式使用Service，"**IP地址.命名空间.pod.cluster.local**"，需要把IP地址里的"`.`"改成"`-`"
+
+Service对象由一个关键字段"**type**"，默认"**ClusterIP**",还有其它三种类型"**ExternalName**","**LoadBalancer**","**NodePort**" 。前两种一般由云服务厂商提供
+
+#### NodePort
+
+`kubectl expose`  `--type=NodePort`
+
+```yaml
+apiVersion: v1
+...
+spec:
+  ...
+  type: NodePort
+```
+
+问题点
+
+* 端口数量有限，30000~32767
+* 会在每个节点都开端口，使用kube-proxy路由到真正的后端Service，对于有很多计算节点的大集群来说会带来一些通信成本
+* 它要求向外界暴露节点的IP地址，为了安全还需要在集群外再搭一个反向代理，增加了方案的复杂度
+
+小结
+
+* Pod生命周期很短暂，会不停地创建销毁，所以需要用Service来实现负载均衡。它由Kubernetes分配固定的IP地址，能够屏蔽后端的Pod变化
+* Service对象使用与Deployment、DaemonSet相同的"selector"字段，选择要代理的后端Pod，是松耦合关系
+* 基于DNS插件，能够以域名的方式访问Service，比静态IP地址更方便
+* 命名空间是Kubernetes用来隔离对象的一种方式，实现了逻辑上的对象分组，Service的域名里就包含了命名空间限定
+* Service的默认类型是"ClusterIP"，只能在集群内部访问，如果改成"NodePort"，就会在节点上开启一个随机端口号，让外界也能够访问内部的服务
+
+
 
 
 
