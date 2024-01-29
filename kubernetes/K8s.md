@@ -1425,6 +1425,89 @@ spec:
 
 ### Kubectl rollout
 
+**应用的"版本更新"实际上更新的是整个Pod。**
+
+ngx-v1.yml
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ngx-conf
+
+data:
+  default.conf: |
+    server {
+      listen 80;
+      location / {
+        default_type text/plain;
+        return 200
+          'ver : $nginx_version\nsrv : $server_addr:$server_port\nhost: $hostname\n';
+      }
+    }
+    
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations: 
+    kubernetes.io/change-cause: v1, ngx=1.21
+  labels:
+    app: ngx-dep
+  name: ngx-dep
+
+spec:
+  minReadySeconds: 15
+  replicas: 4
+  selector:
+    matchLabels:
+      app: ngx-dep
+  template:
+    metadata:
+      labels:
+        app: ngx-dep
+    spec:
+      volumes:
+      - name: ngx-conf-vol
+        configMap:
+          name: ngx-conf
+
+      containers:
+      - image: nginx:1.21-alpine
+        name: nginx
+        ports:
+        - containerPort: 80
+
+        volumeMounts:
+        - mountPath: /etc/nginx/conf.d
+          name: ngx-conf-vol
+          
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ngx-svc
+  
+spec:
+  selector:
+    app: ngx-dep
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+```
+
+
+
+```shell
+# 转发状态
+kubectl port-forward svc/ngx-svc 8080:80 &
+curl 127.1:8080
+```
+
+
+
 
 
 `kubectl rollout status`
@@ -1441,3 +1524,481 @@ spec:
 
 `kubectl rollout history`
 
+```shell
+
+# 
+kubectl rollout history deploy --revision=4
+
+# --to-revision回退到任意一个历史版本
+kubectl rollout undo deploy ngx-dep
+
+```
+
+
+
+小结：
+
+1. 在Kubernetes里应用的版本不仅仅是容器镜像，而是整个Pod模板，为了便于处理使用了摘要算法，计算模板的Hash值作为版本号
+2. Kubernetes更新应用采用的是滚动更新策略，减少旧版本Pod的同时增加新版本Pod，保证在更新过程中服务始终可用
+3. 管理应用更新使用的命令是`kubectl rollout`，子命令有`status`、`history`、`undo`等。
+4. Kubernetes会记录应用的 更新历史，可以使用`history --revision`查看每个版本的详细信息，也可以在每次更新时添加注解`kubernetes.io/change-cause`。
+
+
+
+### Resouces&Probe
+
+#### Resources
+
+容器资源配额
+
+example.yml
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ngx-pod-resources
+
+spec:
+  containers:
+  - image: nginx:alpine
+    name: ngx
+
+    resources:
+      requests:
+        cpu: 10m
+        memory: 100Mi
+      limits:
+        cpu: 20m
+        memory: 200Mi
+```
+
+`containers.resources`
+
+* "**requests**", 容器要申请的资源
+* "**limits**"，容器使用资源的上限
+
+
+
+#### Probe
+
+kubernetes为检查应用状态定义了三种探针
+
+* **Startup**，启动探针，检查应用是否启动成功，适合那些有大量初始化工作要做，启动很慢的应用
+* **Liveness**，存活探针，检查应用是否正常运行，是否存在死锁，死循环
+* **Readiness**，就绪探针，用来检查应用是否可以接受流量，是否能够对外提供服务
+
+如果Pod配置了探针，也有不同的处理策略
+
+* 如果Startup探针失败，就会尝试反复重启，后面的两个探针也不会启动
+* 如果Liveness探针失败，Kubernetes会认为容器发生了异常，也会重启容器
+* 如果Readiness探针失败，Kubernetes会认为容器虽然在运行，但内部有错误，不能正常提供服务，就会把容器从Service对象的负载均衡集合中排除，不会给它分配流量
+
+配置关键字段
+
+* **periodSeconds**, 执行探测动作的时间间隔，默认是10秒探测一次
+* **timeoutSeconds**，探测动作的超时时间，如果超时就认为探测失败，默认是1秒
+* **successThreshold**，连续几次探测成功才认为是正常，对于StartupProbe和livenessProbe来说它只能是1
+* **failureThreshold**，连续探测失败几次才认为是真正发生了异常，默认是3次
+
+探测方式，Kubernetes支持3种：Shell、TCP Socket、HTTP GET
+
+* **exec**，执行一个Linux命令，比如ps、cat等等。
+* **tcpSocket**，使用TCP协议尝试连接容器的指定端口
+* **httpGet**，连接端口并发送HTTP GET请求
+
+要使用探针，必须在开发应用时预留出"检查口"，这样Kubernetes才能调用探针获取信息。
+
+ngx-cm.yml
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ngx-conf
+
+data:
+  default.conf: |
+    server {
+      listen 80;
+      location = /ready {
+        return 200 'I am ready';
+      }
+    }
+```
+
+ngx-pod-probe.yml
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ngx-pod-probe
+
+spec:
+  volumes:
+  - name: ngx-conf-vol
+    configMap:
+      name: ngx-conf
+
+  containers:
+  - image: nginx:alpine
+    name: ngx
+    ports:
+    - containerPort: 80
+    volumeMounts:
+    - mountPath: /etc/nginx/conf.d
+      name: ngx-conf-vol
+
+    startupProbe:
+      periodSeconds: 1
+      exec:
+        command: ["cat", "/var/run/nginx.pid"]
+
+    livenessProbe:
+      periodSeconds: 10
+      tcpSocket:
+        port: 80
+
+    readinessProbe:
+      periodSeconds: 5
+      httpGet:
+        path: /ready
+        port: 80
+```
+
+
+
+小结：
+
+1. 资源配额使用的是cgroup技术，可以限制容器使用的CPU和内存数量，让Pod合理利用系统资源，也能够让Kubernetes更容易调度Pod
+2. Kubernetes定义了Startup、Liveness、Readiness三种健康探针，他们分别探测应用的启动、存活和就绪状态
+3. 探测状态可以使用Shell、TCP Socket、HTTP Gget三种方式，还可以调整探测的频率和超时时间等参数
+
+
+
+### Namespace
+
+
+
+```shell
+kubectl create ns test-ns 
+kubectl get ns
+
+# 命名空间的资源配额
+export out="--dry-run=client -o yaml"
+kubectl create quota dev-qt $out
+```
+
+
+
+test-ns-pod.yml
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ngx
+  namespace: test-ns
+
+spec:
+  containers:
+  - image: nginx:alpine
+    name: ngx
+```
+
+
+
+example.yml
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dev-ns
+
+---
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: dev-qt
+  namespace: dev-ns
+
+spec:
+  hard:
+    requests.cpu: 10
+    requests.memory: 10Gi
+    limits.cpu: 10
+    limits.memory: 20Gi
+
+    requests.storage: 100Gi
+    persistentvolumeclaims: 100
+
+    pods: 100
+    configmaps: 100
+    secrets: 100
+    services: 10
+
+    count/jobs.batch: 1
+    count/cronjobs.batch: 1
+    count/deployments.apps: 1
+```
+
+在ResourceQuota里可以设置各类资源配额
+
+* CPU和内存配额
+* 存储容量配额
+* 核心对象配额
+* 其他API对象配额
+
+
+
+#### 默认资源配额
+
+`kubectl explain limits`
+
+
+
+limit-range-lr.yml
+
+```yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: dev-limits
+  namespace: dev-ns
+
+spec:
+  limits:
+  - type: Container
+    defaultRequest:
+      cpu: 200m
+      memory: 50Mi
+    default:
+      cpu: 500m
+      memory: 100Mi
+  - type: Pod
+    max:
+      cpu: 800m
+      memory: 200Mi
+```
+
+
+
+小结：
+
+1. namespace是一个逻辑概念，没有实体，它的目标是为资源和对象划分一个逻辑边界，避免冲突
+2. ResourceQuota对象可以为namespace添加资源配额，限制全局的CPU、内存和API对象数量
+3. LimitRange对象可以为容器或者Pod添加默认的资源配额，简化对象的创建工作
+
+### Metrics Server & Prometheus
+
+
+
+#### Metrics Server
+
+https://github.com/kubernetes-sigs/metrics-server
+
+
+
+```shell
+# Metrics Server依赖
+wget https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+
+```
+
+1、修改YAML，需要在deploymeny对象里，加上一个额外的运行参数`--kubelet-insecure-tls`
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-server
+  namespace: kube-system
+spec:
+  ... ... 
+  template:
+    spec:
+      containers:
+      - args:
+        - --kubelet-insecure-tls
+        ... ... 
+```
+
+2、预下载Metrics Server的镜像
+
+```shell
+# reference
+repo=registry.aliyuncs.com/google_containers
+
+name=k8s.gcr.io/metrics-server/metrics-server:v0.6.1
+src_name=metrics-server:v0.6.1
+
+docker pull $repo/$src_name
+
+docker tag $repo/$src_name $name
+docker rmi $repo/$src_name
+```
+
+
+
+```shell
+kubectl apply -f components.yaml
+
+kubectl get pod -n kube-system
+
+kubectl top node
+kubectl top pod -n kube-system
+```
+
+
+
+#### HorizontalPodAutoscaler
+
+**hpa**-水平自动伸缩对象, 适用于Deployment和StatefulSet
+
+HorizontalPodAutoscaler的能力完全基于Metrics Server，它从Metrics Server获取当前应用的运行指标，主要是CPU使用率，再依据预定的策略增加或减少Pod的数量
+
+example-ngx.yml
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngx-hpa-dep
+
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ngx-hpa-dep
+
+  template:
+    metadata:
+      labels:
+        app: ngx-hpa-dep
+    spec:
+      containers:
+      - image: nginx:alpine
+        name: nginx
+        ports:
+        - containerPort: 80
+
+        resources:
+          requests:
+            cpu: 50m
+            memory: 10Mi
+          limits:
+            cpu: 100m
+            memory: 20Mi
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: ngx-hpa-svc
+spec:
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 80
+  selector:
+    app: ngx-hpa-dep
+```
+
+注意点：**`spec`一定要用`resources`字段写清楚资源配额**，否则HorizontalPodAutoscaler会无法获取Pod的指标，也就无法实现自动化扩缩容。
+
+```shell
+export out="--dry-run=client -o yaml"              # 定义Shell变量
+kubectl autoscale deploy ngx-hpa-dep --min=2 --max=10 --cpu-percent=5 $out
+```
+
+hpa-example.yml
+
+```yaml
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ngx-hpa
+
+spec:
+  maxReplicas: 10
+  minReplicas: 2
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ngx-hpa-dep
+  targetCPUUtilizationPercentage: 5
+```
+
+压力测试
+
+```shell
+kubectl run test -it --image=httpd:alpine -- sh
+
+ab -c 10 -t 60 -n 1000000 'http://ngx-hpa-svc/'
+```
+
+
+
+#### Prometheus
+
+Prometheus Server之外，还有三个重要的组件
+
+* Push Gateway ：用来适配一些特殊的监控目标，把默认的Pull模式转变为Push模式
+
+* Alert Manager：告警中心，预先设定规则，发现问题时就通过邮件等方式告警
+
+* Grafana：图形化界面，可以定制大量直观的监控仪表盘
+
+  
+
+```shell
+wget https://github.com/prometheus-operator/kube-prometheus/archive/refs/tags/v0.11.0.tar.gz
+```
+
+
+
+1、修改`prometheus-service.yml` 、`grafana-service.yml`
+
+可以给他们添加`type: NodePort`
+
+2、修改`kubeStateMetrics-deployment.yaml`、`prometheusAdapter-deployment.yaml`，因为它们里面有两个存放在 gcr.io 的镜像，必须解决下载镜像的问题。
+
+国内无法下载，只能下载后再上传到DockerHub
+
+```shell
+image: k8s.gcr.io/kube-state-metrics/kube-state-metrics:v2.5.0
+image: k8s.gcr.io/prometheus-adapter/prometheus-adapter:v0.9.1
+
+image: chronolaw/kube-state-metrics:v2.5.0
+image: chronolaw/prometheus-adapter:v0.9.1
+
+docker pull pengyc2019/prometheus-adapter:v0.9.1
+docker tag pengyc2019/prometheus-adapter:v0.9.1 k8s.gcr.io/prometheus-adapter/prometheus-adapter:v0.9.1
+docker rmi pengyc2019/prometheus-adapter:v0.9.1
+docker push k8s.gcr.io/prometheus-adapter/prometheus-adapter:v0.9.1
+
+```
+
+
+
+
+
+```shell
+kubectl create -f manifests/setup
+kubectl create -f manifests
+
+kubectl get svc -n monitoring
+kubectl get pod -n monitoring
+```
+
+
+
+小结：
+
+1. Metris Server是一个Kubernetes插件，能够收集系统的核心资源指标，相关的命令`kubectl top`
+2. Prometheus是云原生监控领域的"事实标准"，用PromQL语言来查询数据，配合Grafana可以展示直观的图形界面，方便监控
+3. HorizontalPodAutoscaler实现了应用的自动水平伸缩功能，它从Metrics Server获取应用的运行指标，再实时调整Pod数量，可以很好地应对突发流量
