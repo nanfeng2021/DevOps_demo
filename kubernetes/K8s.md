@@ -1111,11 +1111,200 @@ spec:
 
 
 
-#### NFS
+* `storageClassName`
+
+* `accessMode`
+  * ReadWriteOnce 存储卷可读可写，但只能被一个节点的Pod挂载
+  * ReadOnlyMany 存储卷只读不可写，可以被任意节点上的Pod多次挂载
+  * ReadWriteMany 存储卷可读可写，可以被任意节点上的Pod多次挂载
+
+* `capacity` 国际标准，Ki/Mi/Gi
+* `hostPath` 指定存储卷的本地路径
+
+host-path-pv.yml
+
+```yaml
+# PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: host-10m-pv
+
+spec:
+  storageClassName: host-test
+  accessModes:
+  - ReadWriteOnce
+  capacity:
+    storage: 10Mi
+  hostPath:
+    path: /tmp/host-10m-pv/
+    
+```
+
+host-path-pvc.yml
+
+```yaml
+#PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: host-5m-pvc
+
+spec:
+  storageClassName: host-test
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Mi
+```
+
+host-path-pod.yml
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: host-pvc-pod
+
+spec:
+  volumes:
+  - name: host-pvc-vol
+    persistentVolumeClaim:
+      claimName: host-5m-pvc
+
+  containers:
+    - name: ngx-pvc-pod
+      image: nginx:alpine
+      ports:
+      - containerPort: 80
+      volumeMounts:
+      - name: host-pvc-vol
+        mountPath: /tmp
+```
+
+小结：
+
+* PersistentVolume简称为PV，是Kubernetes对存储设备的抽象，由系统管理员维护，需要描述清楚存储设备的类型、访问模式、容量等信息
+* PersistentVolumeClaim简称为PVC，代表Pod向系统申请存储资源，它声明对存储的要求，Kubernetes会查找最合适的PV然后绑定
+* StorageClass抽象特定类型的存储系统，归类分组PV对象，用来简化PV/PVC的绑定过程
+* HostPath是最简单的一种PV，数据存储在节点本地，速度快但不能跟随Pod迁移
+
+### NFS
+
+#### server
+
+```shell
+sudo apt -y install nfs-kernel-server
+
+mkdir -p /tmp/nfs
+
+/tmp/nfs 192.168.10.0/24(rw,sync,no_subtree_check,no_root_squash,insecure)
+
+sudo exportfs -ra
+sudo exportfs -v
+
+sudo systemctl start  nfs-server
+sudo systemctl enable nfs-server
+sudo systemctl status nfs-server
+
+showmount -e 127.0.0.1
+```
 
 
 
+#### client
 
+```shell
+sudo apt -y install nfs-common
+
+showmount -e ${ip_address}
+
+mkdir -p /tmp/test
+sudo mount -t nfs 192.168.10.208:/tmp/nfs /tmp/test
+touch /tmp/test/x.yml
+```
+
+
+
+nfs-static-pv.yml
+
+```yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nfs-1g-pv
+
+spec:
+  storageClassName: nfs
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: 1Gi
+
+  nfs:
+    path: /tmp/nfs/1g-pv
+    server: 192.168.10.208
+
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nfs-1g-pv
+
+spec:
+  storageClassName: nfs
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: 1Gi
+
+  nfs:
+    path: /tmp/nfs/1g-pv
+    server: 192.168.10.208
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nfs-static-pod
+
+spec:
+  volumes:
+  - name: nfs-pvc-vol
+    persistentVolumeClaim:
+      claimName: nfs-static-pvc
+
+  containers:
+    - name: nfs-pvc-test
+      image: nginx:alpine
+      ports:
+      - containerPort: 80
+
+      volumeMounts:
+        - name: nfs-pvc-vol
+          mountPath: /tmp
+```
+
+
+
+#### Provisioner
+
+https://github.com/kubernetes-sigs/nfs-subdir-external-provisioner
+
+
+
+小结：
+
+* 在Kubernetes集群里，网络存储系统更适合数据持久化，NFS是最容易使用的一种网络存储系统，需要实现安装好服务端和客户端
+
+* 可编写PV定义NFS静态存储卷，要指定NFS服务器的IP地址和共享目录名
+
+* 使用NFS动态存储卷必须要部署相应的Provisioner
+
+* 动态存储卷不需要手工定义PV，而是要定义StorageClass，由关联的Provisioner自动创建PV完成绑定
+
+  
 
 ### StatefulSet
 
